@@ -20,7 +20,7 @@ def nearest_city(city_list, kdtree, x, y):
     return city_name
 
 def korea_coor_data():
-    file_name = '.\KNU_KCG\sns crawling\korea_administrative_division_latitude_longitude.xlsx'
+    file_name = '.\\res\korea_administrative_division_latitude_longitude.xlsx'
     data = read_coor(file_name)
     print(data)
 
