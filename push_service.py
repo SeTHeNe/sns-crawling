@@ -1,4 +1,6 @@
-from pyfcm import FCMNotification
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import messaging
 from datetime import datetime, timedelta
 from multiprocessing import Pool
 import urllib.request
@@ -32,7 +34,7 @@ month = {
     'Jul':7, 'Aug':8, 'Sep':9, 'Oct':10, 'Nov':11, 'Dec':12
 }
 
-FCM_API_KEY = '3013d9752e413e1451c0660b9ef7784f52cae882'
+FCM_CRED_PATH = '.\\res\\knu-capston-firebase-adminsdk-e1d14-3013d9752e.json'
 
 USERADMIN           = 'userAdmin'
 USERADMINPASS       = 'userAdminPass'
@@ -49,13 +51,24 @@ def get_server_time(url):
     timestamp = datetime(y, m, d, hour + 9, min, sec)
     return timestamp
 
-def send_push_data(push_service, message_title, message_body, data_message, registration_ids):
-    result = push_service.notify_multiple_devices(registration_ids=registration_ids,
-                                                  message_title=message_title,
-                                                  message_body=message_body,
-                                                  data_message=data_message)
-
-    return result
+def send_push_data(message_title, message_body, data_message, registration_ids):
+    message = messaging.MulticastMessage(
+        #data=data_message,
+        notification=messaging.Notification(
+            title=message_title,
+            body=message_body
+        ),
+        tokens=registration_ids
+    )
+    response = messaging.send_multicast(message)
+    if response.failure_count > 0:
+        responses = response.responses
+        failed_tokens = []
+        for idx, resp in enumerate(responses):
+            if not resp.success:
+                # The order of responses corresponds to the order of the registration tokens.
+                failed_tokens.append(registration_ids[idx])
+        print('List of tokens that caused failures: {0}'.format(failed_tokens))
 
 def construct_push_data(weather_info):
     title = '날씨 알림'
@@ -63,7 +76,13 @@ def construct_push_data(weather_info):
     data = dict()
 
     for i in range(len(weather_info['data'])):
-        data.update({f'data_{i}':weather_info['data'][i]})
+        created_at  = str(weather_info["data"][i][0])
+        position    = f'{weather_info["data"][i][1][0]} {weather_info["data"][i][1][0]}'
+        text        = weather_info["data"][i][2]
+
+        data.update({f'data_{i}':{'created_at'  :created_at,
+                                  'position'    :position,
+                                  'text'        :text}})
 
     return title, body, data
 
@@ -113,14 +132,19 @@ def get_user_list(db_cursor, city_list, kdtree):
         token = row['userToken']
         created_at = row['created_at']
         city_name = nearest_city(city_list, kdtree, float(row['longitude']), float(row['latitude']))
+        index = 0
 
         if city_name in user_list:
-            for i in range(len(user_list[city_name][2])):
-                if user_list[city_name][2][i][0] == token:
-                    if user_list[city_name][2][i][1] <= created_at:
-                        user_list[city_name][2][i][1] = created_at
-                    else:
+            flag = False
+            new_ver = False
+            for user in user_list[city_name][2]:
+                if token in user:
+                    if created_at > user[1]:
+                        user_list[city_name][2][index][1] = created_at
+                        flag = True
                         break
+            if flag is False:
+                user_list[city_name][2].append([token, created_at])
         else:
             user_list.update({city_name:[False, datetime.now(), [[token, created_at]]]})
 
@@ -158,7 +182,8 @@ def update_user_list(db_cursor, user_list, city_list, kdtree):
             print(f'user updated : {city_name}, {token}, {created_at}')
 
 def main():
-    push_service = FCMNotification(api_key=FCM_API_KEY)
+    cred = credentials.Certificate(FCM_CRED_PATH)
+    firebase_admin.initialize_app(cred)
 
     user_db = db_connection(HOST, PORT, USERADMIN, USERADMINPASS, DB)
     user_cursor = user_db.cursor(pymysql.cursors.DictCursor)
@@ -167,6 +192,9 @@ def main():
 
     user_list = get_user_list(user_cursor, city_list, kdtree)
     user_db.close()
+    for city_name, users in user_list.items():
+        for user in users[2]:
+            print(f'user_list : {city_name}, {user[0]}, {user[1]}')
     weather_list = dict()
 
     timestamp = get_server_time(twitter_time_url)
@@ -198,6 +226,11 @@ def main():
                         else:
                             break
                     if len(city_weather[i + 1]) >= TRIGGER:
+                        weather_info = {
+                            'city_name'     : city,
+                            'weather_tag'   : i + 1,
+                            'data'          : []
+                        }
                         try:
                             if user_list[city][0] is False or (user_list[city][0] is True and (cur_timestamp - user_list[city][1]).seconds >= TIMEOUT):
                                 user_list[city][1] = cur_timestamp
@@ -205,16 +238,16 @@ def main():
                                 for user in user_list[city][2]:
                                     push_list.append(user[0])
                                 user_list[city][0] = True
-                                weather_info = {
-                                    'city_name'     : city,
-                                    'weather_tag'   : i + 1,
-                                    'data'          : []
-                                }
                                 for weather in city_weather[i + 1]:
                                     weather_info['data'].append([weather[0], weather[1], weather[2], weather[3]])
-                                send_push_data(push_service, construct_push_data(weather_info), push_list)
                         except:
                             print(f'{city} user does not exist')
+                        title, body, data = construct_push_data(weather_info)
+                        try:
+                            send_push_data(title, body, data, push_list)
+                        except (AuthenticationError, FCMServerError, InvalidDataError, InternalPackageError) as e:
+                            print(e)
+
                 except:
                     print(f'{weather_tag[i + 1]} data does not exist\n')
 
