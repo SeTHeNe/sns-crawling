@@ -67,12 +67,11 @@ def delete_all_rules(rules):
 
 def set_rules(delete):
     rules = [
-        #{"value": "비 -방탄 - BTS -RT -is:retweet", "tag": "비"},
-        #{"value": "눈 -뜨 -RT -is:retweet", "tag": "눈"},
-        #{"value": "안개 -RT -is:retweet", "tag": "안개"},
-        #{"value": "미세먼지 -RT -is:retweet", "tag": "미세먼지"},
-        #{"value": "소나기 -RT -is:retweet", "tag": "소나기"}
-        {"value": "비 프로젝트 테스트 -RT -is:retweet", "tag": "비"}
+        {"value": "비 -방탄 - BTS -RT -is:retweet", "tag": "비"},
+        {"value": "눈 -뜨 -RT -is:retweet", "tag": "눈"},
+        {"value": "안개 -RT -is:retweet", "tag": "안개"},
+        {"value": "미세먼지 -RT -is:retweet", "tag": "미세먼지"},
+        {"value": "소나기 -RT -is:retweet", "tag": "소나기"}
     ]
     payload = {"add": rules}
     response = requests.post(
@@ -122,7 +121,7 @@ def get_stream(set, db, cursor):
             except:
                 weather.set_location(None)
             try:
-                if weather:
+                if weather is not None:
                     sql_row = '({}, {}, {}, {}, {})'.format(weather._id, 
                                                             f'"{weather._datetime}"', 
                                                             f'ST_GeomFromText("POINT({weather._location})")', 
@@ -131,8 +130,9 @@ def get_stream(set, db, cursor):
                     sql = "INSERT INTO weatherInfo (weatherInfoId, createTime, location, container, weatherId) VALUES " + sql_row
                     cursor.execute(sql)
                     db.commit()
+                    print(f'commited data : {weather._datetime}, {weather._location}, {weather._text}, {weather._tag}')
             except:
-                print('weather has no geo information')
+                continue
 
 def main():
     weather_db = db_connection(HOST, PORT, USER, PASSWD, DB)

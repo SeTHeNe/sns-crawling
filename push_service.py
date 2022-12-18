@@ -2,7 +2,6 @@ import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import messaging
 from datetime import datetime, timedelta
-from multiprocessing import Pool
 import urllib.request
 import time
 import pymysql
@@ -34,7 +33,7 @@ month = {
     'Jul':7, 'Aug':8, 'Sep':9, 'Oct':10, 'Nov':11, 'Dec':12
 }
 
-FCM_CRED_PATH = '.\\res\\knu-capston-firebase-adminsdk-e1d14-3013d9752e.json'
+FCM_CRED_PATH = '.\\res\\snscrawlling-30ba2-firebase-adminsdk-l8b6a-a354180e44.json'
 
 USERADMIN           = 'userAdmin'
 USERADMINPASS       = 'userAdminPass'
@@ -67,8 +66,11 @@ def send_push_data(message_title, message_body, data_message, registration_ids):
         for idx, resp in enumerate(responses):
             if not resp.success:
                 # The order of responses corresponds to the order of the registration tokens.
-                failed_tokens.append(registration_ids[idx])
+                error = resp.exception.code
+                failed_tokens.append((registration_ids[idx], error))
         print('List of tokens that caused failures: {0}'.format(failed_tokens))
+        return failed_tokens
+    return None
 
 def construct_push_data(weather_info):
     title = '날씨 알림'
@@ -137,10 +139,10 @@ def get_user_list(db_cursor, city_list, kdtree):
         if city_name in user_list:
             flag = False
             new_ver = False
-            for user in user_list[city_name][2]:
+            for idx, user in enumerate(user_list[city_name][2]):
                 if token in user:
                     if created_at > user[1]:
-                        user_list[city_name][2][index][1] = created_at
+                        user_list[city_name][2][idx][1] = created_at
                         flag = True
                         break
             if flag is False:
@@ -168,14 +170,12 @@ def update_user_list(db_cursor, user_list, city_list, kdtree):
                 if token in user:
                     flag = True
                     if created_at > user[1]:
-                        new_ver = True
+                        user_list[city_name][2][index][1] = created_at
                 index += 1
             if flag is False:
                 user_list[city_name][2].append([token, created_at])
-            elif flag is True and new_ver is False:
-                continue
             else:
-                user_list[city_name][2][index][1] = created_at
+                continue
             print(f'user updated : {city_name}, {token}, {created_at}')
         else:
             user_list.update({city_name:[False, datetime.now(), [[token, created_at]]]})
@@ -197,6 +197,7 @@ def main():
             print(f'user_list : {city_name}, {user[0]}, {user[1]}')
     weather_list = dict()
 
+
     timestamp = get_server_time(twitter_time_url)
     cur_timestamp = get_server_time(twitter_time_url)
 
@@ -207,22 +208,24 @@ def main():
         weather_db = db_connection(HOST, PORT, WEATHERADMIN, WEATHERADMINPASS, DB)
         weather_cursor = weather_db.cursor(pymysql.cursors.DictCursor)
 
+        timestamp = cur_timestamp
         time.sleep(UPDATEPERIOD)
         cur_timestamp = get_server_time(twitter_time_url)
         updated = update_weather_info(weather_list, weather_cursor, city_list, kdtree, timestamp, cur_timestamp)
-        update_user_list(user_cursor, user_list, city_list, kdtree)
+        user_list = get_user_list(user_cursor, city_list, kdtree)
 
         user_db.close()
         weather_db.close()
 
         for city in updated:
+            print(city)
             city_weather = weather_list[city]
             for i in range(len(weather_tag)):
                 try:
                     print(*city_weather[i + 1], sep='\n')
                     for j in range(len(city_weather[i + 1])):
                         if (cur_timestamp - city_weather[i + 1][0][0]).seconds >= TIMEOUT:
-                            print(weather_list[city][i + 1].pop(0))
+                            print(f'expired data : {weather_list[city][i + 1].pop(0)}')
                         else:
                             break
                     if len(city_weather[i + 1]) >= TRIGGER:
@@ -243,15 +246,20 @@ def main():
                         except:
                             print(f'{city} user does not exist')
                         title, body, data = construct_push_data(weather_info)
-                        try:
-                            send_push_data(title, body, data, push_list)
-                        except (AuthenticationError, FCMServerError, InvalidDataError, InternalPackageError) as e:
-                            print(e)
-
+                        failed_tokens = send_push_data(title, body, data, push_list)
+                        if failed_tokens is not None:
+                            user_db = db_connection(HOST, PORT, USERADMIN, USERADMINPASS, DB)
+                            user_cursor = user_db.cursor(pymysql.cursors.DictCursor)
+                            sql = 'DELETE FROM location WHERE '
+                            sql_append = ''
+                            for token in failed_tokens:
+                                if token[1] == 'NOT_FOUND':
+                                    sql_append = sql_append + 'userToken="{}"'.format(token[0])
+                            user_cursor.execute(sql + sql_append)
+                            user_db.commit()
+                            user_db.close()
                 except:
-                    print(f'{weather_tag[i + 1]} data does not exist\n')
-
-        timestamp = get_server_time(twitter_time_url)
+                    continue
 
     return 0
 

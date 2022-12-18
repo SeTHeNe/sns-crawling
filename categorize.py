@@ -1,3 +1,13 @@
+import numpy as np
+import pandas as pd
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+from sklearn import svm
+from sklearn import tree
+from sklearn.ensemble import RandomForestClassifier
 import re
 from datetime import datetime
 from konlpy.tag import Okt
